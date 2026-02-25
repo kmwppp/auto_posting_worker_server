@@ -1,0 +1,6 @@
+my-fastapi-app/venv/
+my-fastapi-app/.env
+*.pyc
+__pycache__/
+my-fastapi-app/error_screen_shot
+my-fastapi-app/static

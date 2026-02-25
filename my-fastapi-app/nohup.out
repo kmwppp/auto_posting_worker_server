@@ -1,0 +1,50 @@
+INFO:     Started server process [20309]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started server process [20310]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Started server process [20311]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Started server process [20312]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/ HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+ERROR:    Error loading ASGI app. Could not import module "main".
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
+INFO:     119.65.242.50:0 - "GET /api/hello HTTP/1.0" 200 OK
