@@ -2,74 +2,83 @@ import asyncio
 import json
 import os
 import multiprocessing
+import time
 # redis 직접 임포트 대신 매니저를 가져옵니다.
 from api.v1.dependencies.redis_manager import redis_manager 
 from api.v1.schemas.blog import BlogBulkRequest
 from api.services.blog_service import start_bulk_posting
 
 async def worker_process():
-    # 1. 1호점 Redis 주소 강제 주입 (필요시)
-    # 이미 .env에 잘 적혀있다면 이 줄은 생략 가능하지만, 확실하게 하기 위해 넣습니다.
-    # redis_manager.redis_url = "redis://52.63.149.67:6379/0"
-
+    """일꾼: 작업 딱 1개만 하고 스스로 종료함"""
     try:
-        # 2. [중요] 전역 redis_manager를 이 프로세스 안에서 연결합니다.
-        # 이렇게 해야 start_bulk_posting 내부의 redis_manager가 제대로 작동합니다.
+        # 1. Redis 연결
         await redis_manager.connect() 
-        print(f"🚀 [일꾼 {multiprocessing.current_process().name}] Redis 전역 매니저 연결 성공!")
-    except Exception as e:
-        print(f"❌ [일꾼 {multiprocessing.current_process().name}] 연결 실패: {e}")
-        return
-
-    while True:
-        try:
-            # 3. local_redis 대신 redis_manager.redis_client를 사용합니다.
-            result = await redis_manager.redis_client.brpop("task_queue", timeout=0)
+        print(f"🚀 [일꾼 {multiprocessing.current_process().name}] Redis 연결 성공!")
+        
+        # 2. 작업 하나 가져오기 (무한루프 while True 제거됨)
+        # timeout을 주지 않으면 작업이 올 때까지 여기서 대기합니다.
+        result = await redis_manager.redis_client.brpop("task_queue", timeout=0)
+        
+        if result:
+            _, raw_data = result
+            task_info = json.loads(raw_data)
+            task_id = task_info.get('task_id')
             
-            if result:
-                _, raw_data = result
-                task_info = json.loads(raw_data)
-                task_id = task_info.get('task_id')
+            print(f"📦 [일꾼 {multiprocessing.current_process().name}] 작업 수신: {task_id}")
+
+            try:
+                payload_obj = BlogBulkRequest(**task_info['payload'])
                 
-                print(f"📦 [일꾼 {multiprocessing.current_process().name}] 작업 수신: {task_id}")
+                # 실제 포스팅 작업 (10시간이 걸려도 끝날 때까지 기다림)
+                await start_bulk_posting(
+                    payload_obj, 
+                    task_id, 
+                    task_info.get('target_api_key')
+                )
+                print(f"✅ [일꾼 {multiprocessing.current_process().name}] 작업 완료! 메모리 정리를 위해 종료합니다.")
 
-                try:
-                    payload_obj = BlogBulkRequest(**task_info['payload'])
-                    
-                    # 이제 함수 내부에서 redis_manager를 호출해도 에러가 나지 않습니다.
-                    await start_bulk_posting(
-                        payload_obj, 
-                        task_id, 
-                        task_info.get('target_api_key')
-                    )
-                    print(f"✅ [일꾼 {multiprocessing.current_process().name}] 작업 완료: {task_id}")
-
-                except Exception as inner_e:
-                    print(f"⚠️ [일꾼 {multiprocessing.current_process().name}] 실행 중 에러: {inner_e}")
-
-        except Exception as e:
-            print(f"🚨 [워커 루프] 에러 발생: {e}")
-            await asyncio.sleep(2)
+            except Exception as inner_e:
+                print(f"⚠️ [일꾼 {multiprocessing.current_process().name}] 실행 중 에러: {inner_e}")
+    
+    except Exception as e:
+        print(f"🚨 [일꾼] 치명적 에러: {e}")
+    finally:
+        # 연결 해제 후 프로세스 종료 (자연스럽게 죽음)
+        await redis_manager.disconnect()
 
 def main():
     num_workers = 50
-    processes = []
-    print(f"🔥 총 {num_workers}개의 일꾼 프로세스를 가동합니다.")
-
-    for i in range(num_workers):
-        p = multiprocessing.Process(
-            target=lambda: asyncio.run(worker_process()), 
-            name=f"Worker-{i+1}"
-        )
-        p.daemon = True 
-        p.start()
-        processes.append(p)
+    processes = {}  # PID를 키로 관리하여 더 정확하게 체크
+    print(f"🔥 총 {num_workers}개의 일꾼 프로세스를 '상시 충원' 모드로 가동합니다.")
 
     try:
-        for p in processes:
-            p.join()
+        while True:
+            # 1. 죽은 일꾼(작업 마치고 종료된 프로세스) 정리
+            dead_pids = [pid for pid, p in processes.items() if not p.is_alive()]
+            for pid in dead_pids:
+                processes[pid].join() # 좀비 프로세스 방지
+                del processes[pid]
+                print(f"🧹 일꾼(PID: {pid}) 작업 완료 후 퇴근. 현재 남은 일꾼: {len(processes)}명")
+
+            # 2. 부족한 만큼 새 일꾼 투입 (항상 50개 유지)
+            while len(processes) < num_workers:
+                # 프로세스 이름에 타임스탬프를 넣어 중복 방지
+                p = multiprocessing.Process(
+                    target=lambda: asyncio.run(worker_process()), 
+                    name=f"Worker-{time.time()}"
+                )
+                p.daemon = True 
+                p.start()
+                processes[p.pid] = p
+                print(f"➕ 새 일꾼 투입 (PID: {p.pid}). 총 일꾼: {len(processes)}명")
+
+            # 3. 메인 루프 과부하 방지를 위한 짧은 휴식
+            time.sleep(1)
+
     except KeyboardInterrupt:
-        print("🛑 중단됨")
+        print("🛑 운영 중단 - 모든 일꾼을 해산합니다.")
+        for p in processes.values():
+            p.terminate()
 
 if __name__ == "__main__":
     main()

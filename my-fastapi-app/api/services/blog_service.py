@@ -11,6 +11,8 @@ from sqlalchemy import text
 # 워드프레스 검색을 돕기 위한 Kiwi 맞춤법 교정
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+import random
+from playwright_stealth import Stealth
 
 # 필요한 모델(BlogBulkRequest 등) 임포트
 from api.v1.schemas.blog import BlogBulkRequest, PostingTermType, MainBlogType, PostType, PostTitleType
@@ -250,36 +252,37 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                             headless=True,
                             proxy=proxy_config,
                             args=[
-                                "--disable-dev-shm-usage",  # 리눅스 서버에서 메모리 부족으로 인한 '구려짐' 방지 핵심
-                                "--no-sandbox",             # 보안 샌드박스 비활성화 (성능 향상)
-                                "--disable-gpu",            # GPU 연산 제외하여 CPU 부하 감소
-                                "--disable-setuid-sandbox",
-                                "--no-first-run",
-                                "--no-zygote",
-                                "--single-process",          # 리소스가 부족한 사양이면 성능에 도움을 줌
-                                "--js-flags='--max-old-space-size=256'" # 각 브라우저의 자바스크립트 메모리 사용량을 제한해서 10개가 안 뻗게 만듭니다.
+                                "--disable-blink-features=AutomationControlled", # 자동화 제어 신호 비활성화
+                                "--disable-infobars",
+                                "--no-sandbox",
+                                "--disable-dev-shm-usage",
+                                "--disable-extensions",
+                                # --single-process 등 비표준 인자는 제거하여 일반 브라우저처럼 보이게 함
                             ]
                         )
 
                         # 2. 컨텍스트 설정 (기존 유지 + 뷰포트 고정으로 로딩 속도 향상)
                         context = await browser.new_context(
                             storage_state=auth_path,
+                            # 최신 크롬 버전과 유사하게 유지 (주기적 업데이트 필요)
                             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                            permissions=['clipboard-read', 'clipboard-write'],
-                            viewport={'width': 1280, 'height': 800} # 뷰포트를 명시하면 렌더링 계산이 줄어듦
+                            viewport={'width': 1920, 'height': 1080}, # 일반적인 모니터 해상도 사용
+                            device_scale_factor=1,
+                            is_mobile=False,
+                            has_touch=False,
+                            locale="ko-KR",
+                            timezone_id="Asia/Seoul"
                         )
                         
                         page = await context.new_page()
+
+                        # 3. ✨ [강력한 은밀 모드 적용] ✨
+                        # 단순히 webdriver만 지우는 것이 아니라 브라우저의 모든 자동화 흔적을 지웁니다.
+                        stealth = Stealth()
+                        await stealth.apply_stealth_async(page)
+
                         # 기본 타임아웃 설정 (모든 작업에 개별 타임아웃 주느라 코드 지저분해지는 것 방지)
                         page.set_default_timeout(60000)
-
-                        # ✨ [은밀 모드 적용] ✨
-                        # 실제 포스팅 페이지에서도 로봇임을 숨겨야 차단을 피할 수 있습니다.
-                        await page.add_init_script("""
-                            Object.defineProperty(navigator, 'webdriver', {
-                                get: () => undefined
-                            });
-                        """)
 
                         # 필요 시 컨텍스트에 직접 권한 부여 (더 확실한 방법)
                         await context.grant_permissions(['clipboard-read', 'clipboard-write'])
@@ -307,28 +310,28 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                             # URL 모드일 때는 검색 없이 리스트에 있던 URL 그대로 사용
                             main_site_url = fixed_url
                         
-                        # # 1. 워드프레스 주소 먼저 추출 (QR 옵션 여부와 상관없이 공통으로 필요)
-                        # wp_url = await get_wordpress_post_url(
-                        #     db, page, payload.siteUrl, post_data.main_keyword, 
-                        #     user.current_user_id, user.external_id, task_id
-                        # )
-
                         # 🚩 [체크 포인트] QR변환 전 확인
                         await check_abort(task_id)
 
                         # 2. QR 변환 옵션이 켜져 있는 경우
                         if payload.autoChangeQRLink:
+                            # 사람처럼 보이기 위한 랜덤 딜레이 (예: 1~3초)
+                            await asyncio.sleep(random.uniform(1.0, 3.0))
+
                             # 네이버 QR 변환 시도
                             short_url = await get_naver_qr_url(
                                 page, main_site_url, 
                                 user.current_user_id, user.external_id, task_id, BASE_DELAY
                             )
+
+                            # 작업 후 바로 이동하지 않고 잠시 머물다 이동
+                            await asyncio.sleep(random.uniform(0.5, 1.5))
                             
                             # [중요] 성공/실패 여부와 상관없이 무조건 페이지 초기화
                             print("🧹 QR 작업 종료 후 페이지 초기화 중...")
                             try:
-                                # domcontentloaded로 설정해야 네트워크가 좀 느려도 다음 로직으로 빨리 넘어갑니다.
-                                await page.goto("https://www.naver.com", wait_until="domcontentloaded", timeout=30000) 
+                                # domcontentloaded 보다는 'networkidle'이 더 자연스러운 사용자의 흐름입니다.
+                                await page.goto("https://www.naver.com", wait_until="networkidle", timeout=30000) 
                             except:
                                 pass # 메인 이동 실패는 무시하고 진행
                                 
