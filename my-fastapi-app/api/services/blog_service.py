@@ -136,6 +136,13 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
         total_titles_count = len(target_list)
 
         for user in payload.authList:
+
+            # 🚩 [수정 포인트 1] 계정 로그인 시도 전, 남은 키워드가 있는지 먼저 확인
+            if current_post_idx >= total_titles_count:
+                msg = "🏁 모든 키워드/제목 소진으로 작업을 종료합니다."
+                print(msg)
+                await redis_manager.publish(task_id, msg, user_system_id)
+                break # 전체 계정 루프 탈출 (더 이상 로그인 안 함)
             
             # 🚩 [체크 포인트 1] 다음 계정으로 넘어가기 전 확인
             await check_abort(task_id)
@@ -151,7 +158,7 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                 )
                 msg = f"[{user.external_id}] 계정 작업 시작 전 {payload.postingTerm}분 대기 중..."
                 # 🧨 고칠 곳: manager.broadcast -> redis_manager.publish
-                await redis_manager.publish(task_id, msg)
+                await redis_manager.publish(task_id, msg, user_system_id)
                 await asyncio.sleep(0.1)
                 wait_seconds = payload.postingTerm * 60
                 # 🧨 1분 단위가 아니라 10초 단위로 쪼개서 체크하면 더 빠릿합니다.
@@ -171,12 +178,12 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                 
                 if auth_path is None:
                     # 🧨 고칠 곳
-                    await redis_manager.publish(task_id, f"⚠️ [{user.external_id}] 로그인 실패로 작업을 건너뜁니다.")
+                    await redis_manager.publish(task_id, f"⚠️ [{user.external_id}] 로그인 실패로 작업을 건너뜁니다.", user_system_id)
                     await asyncio.sleep(0.1)
                     continue # 다음 유저로 넘어감
                     
                 # 🧨 고칠 곳
-                await redis_manager.publish(task_id, f"✅ [{user.external_id}] 세션 로드 성공. 포스팅을 시작합니다.")
+                await redis_manager.publish(task_id, f"✅ [{user.external_id}] 세션 로드 성공. 포스팅을 시작합니다.", user_system_id)
                 await asyncio.sleep(0.1)
 
             except Exception as e:
@@ -184,7 +191,7 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                 error_msg = f"🚨 [{user.external_id}] 시스템 오류 발생: {str(e)}"
                 print(error_msg)
                 # 🧨 고칠 곳
-                await redis_manager.publish(task_id, error_msg)
+                await redis_manager.publish(task_id, error_msg, user_system_id)
                 await asyncio.sleep(0.1)
                 await log_to_db(user.current_user_id, user.external_id, "시스템 에러", error_msg, status="FAIL")
                 continue # 다음 유저로 넘어감
@@ -219,7 +226,7 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
 
                 await log_to_db(user.current_user_id, user.external_id, current_posting_title, "GPT 원고 생성 중")
                 # 🧨 고칠 곳
-                await redis_manager.publish(task_id, f"🧠 GPT 원고 생성 중: {current_posting_title}")
+                await redis_manager.publish(task_id, f"🧠 GPT 원고 생성 중: {current_posting_title}", user_system_id)
                 await asyncio.sleep(0.1)
                 
                 # GPT 생성 로직
@@ -228,7 +235,7 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                 if not blog_data:
                     msg = f"❌ [{user.external_id}] 원고 생성 실패로 이번 포스팅은 건너뜁니다."
                     # 🧨 고칠 곳
-                    await redis_manager.publish(task_id, msg)
+                    await redis_manager.publish(task_id, msg, user_system_id)
                     await asyncio.sleep(0.1)
                     await log_to_db(user.current_user_id, user.external_id, current_posting_title, msg, status="FAIL")
                     continue
@@ -237,11 +244,11 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                 # 🚩 [체크 포인트] 이미지 생성 전 확인
                 await check_abort(task_id)
                 # 🧨 고칠 곳
-                await redis_manager.publish(task_id, f"🎨 이미지 생성 중...")
+                await redis_manager.publish(task_id, f"🎨 이미지 생성 중...", user_system_id)
                 await asyncio.sleep(0.1)
-                blog_data = await generate_blog_images(user.current_user_id, blog_data, task_id)
+                blog_data = await generate_blog_images(user.current_user_id, blog_data, task_id, user_system_id)
                 # 🧨 고칠 곳
-                await redis_manager.publish(task_id, f"✨ 모든 이미지 작업이 완료되었습니다.")
+                await redis_manager.publish(task_id, f"✨ 모든 이미지 작업이 완료되었습니다.", user_system_id)
                 await asyncio.sleep(0.1)
 
                 # 브라우저 실행 및 포스팅
@@ -257,15 +264,28 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                                 "--no-sandbox",
                                 "--disable-dev-shm-usage",
                                 "--disable-extensions",
+                                "--disable-features=IsolateOrigins,site-per-process",
+                                "--disable-gpu",
                                 # --single-process 등 비표준 인자는 제거하여 일반 브라우저처럼 보이게 함
                             ]
                         )
+
+                        # 실제 브라우저 버전에 맞는 UA 생성
+                        version_raw = browser.version
+
+                        if "/" in version_raw:
+                            browser_version = version_raw.split("/")[1]
+                        else:
+                            browser_version = version_raw
+
+                        user_agent = f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{browser_version} Safari/537.36"
+
 
                         # 2. 컨텍스트 설정 (기존 유지 + 뷰포트 고정으로 로딩 속도 향상)
                         context = await browser.new_context(
                             storage_state=auth_path,
                             # 최신 크롬 버전과 유사하게 유지 (주기적 업데이트 필요)
-                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                            user_agent=user_agent,
                             viewport={'width': 1920, 'height': 1080}, # 일반적인 모니터 해상도 사용
                             device_scale_factor=1,
                             is_mobile=False,
@@ -273,6 +293,70 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                             locale="ko-KR",
                             timezone_id="Asia/Seoul"
                         )
+
+                        # ===== fingerprint 위장 스크립트 =====
+                        await context.add_init_script("""
+                        
+                        // webdriver 제거
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => undefined
+                        });
+
+                        // CPU 코어 수 위장
+                        Object.defineProperty(navigator, 'hardwareConcurrency', {
+                            get: () => 8
+                        });
+
+                        // 메모리 위장
+                        Object.defineProperty(navigator, 'deviceMemory', {
+                            get: () => 8
+                        });
+
+                        // plugins 위장
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [1,2,3,4,5]
+                        });
+
+                        // languages 위장
+                        Object.defineProperty(navigator, 'languages', {
+                            get: () => ['ko-KR', 'ko']
+                        });
+
+                        // Chrome runtime 위장
+                        window.chrome = {
+                            runtime: {},
+                            loadTimes: function(){},
+                            csi: function(){}
+                        };
+
+                        // permissions 위장
+                        const originalQuery = window.navigator.permissions.query;
+
+                        window.navigator.permissions.query = (parameters) => {
+
+                            if (parameters.name === 'notifications') {
+                                return Promise.resolve({ state: Notification.permission });
+                            }
+
+                            return originalQuery(parameters);
+                        };
+
+                        // WebGL vendor 위장
+                        const getParameter = WebGLRenderingContext.prototype.getParameter;
+                        WebGLRenderingContext.prototype.getParameter = function(parameter) {
+
+                            if (parameter === 37445 || parameter === 7936) {
+                                return 'Intel Inc.';
+                            }
+
+                            if (parameter === 37446 || parameter === 7937) {
+                                return 'Intel Iris OpenGL Engine';
+                            }
+
+                            return getParameter.call(this, parameter);
+                        };
+
+                        """)
                         
                         page = await context.new_page()
 
@@ -336,7 +420,7 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                                 pass # 메인 이동 실패는 무시하고 진행
                                 
                             if short_url is None:
-                                await redis_manager.publish(task_id, "⚠️ QR 생성 실패로 인해 원래 링크를 사용합니다.")
+                                await redis_manager.publish(task_id, "⚠️ QR 생성 실패로 인해 원래 링크를 사용합니다.", user_system_id)
                                 short_url = main_site_url
                         
                         # 3. QR 옵션이 꺼져 있는 경우
@@ -365,7 +449,7 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                     error_msg = f"❌ [{user.external_id}] 작업 중 오류: {str(post_error)}"
                     print(error_msg)
                     # 🧨 고칠 곳
-                    await redis_manager.publish(task_id, error_msg)
+                    await redis_manager.publish(task_id, error_msg, user_system_id)
                     await log_to_db(user.current_user_id, user.external_id, "포스팅 실패", error_msg, status="FAIL")
                     
                     # 에러 시에도 다음 포스팅을 시도하게 함
@@ -384,7 +468,7 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                 # 다음 포스팅할 제목이 남아있을 때만 기다립니다.
                 if i < user.postingCount - 1 and current_post_idx < total_titles_count:
                     wait_minutes = payload.postingTerm
-                    await redis_manager.publish(task_id, f"⏳ 포스팅 성공! {wait_minutes}분 대기 후 다음 글을 작성합니다.")
+                    await redis_manager.publish(task_id, f"⏳ 포스팅 성공! {wait_minutes}분 대기 후 다음 글을 작성합니다.", user_system_id)
 
                     # 🧨 [수정] 포스팅 사이 대기 시간도 10초 단위로 쪼개서 중단 체크
                     total_wait_seconds = wait_minutes * 60
@@ -404,34 +488,34 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
     except InterruptedError as e:
         stop_msg = f"🛑 중단 성공: {str(e)}"
         print(stop_msg)
-        await redis_manager.publish(task_id, stop_msg)
+        await redis_manager.publish(task_id, stop_msg, user_system_id)
         await log_to_db(user_system_id, "SYSTEM", "사용자 취소", stop_msg, status="CANCEL")
 
     # ✅ 1순위: 프록시 속도 문제로 인한 종료 처리
     except ProxyTimeoutError as e:
         error_msg = f"🛑 프록시 영향으로 작업 강제 종료: {str(e)}"
         print(error_msg)
-        await redis_manager.publish(task_id, error_msg)
+        await redis_manager.publish(task_id, error_msg, user_system_id)
         # 💡 [추가 권장] DB에도 왜 죽었는지 로그 한 줄 남겨주기
         await log_to_db(user_system_id, "SYSTEM", "프록시 중단", error_msg, status="FAIL")
 
     except ChatGptError as ce:
         # 🧨 [지피티 요금 부족 시 처리]
         error_msg = f"🛑 [시스템 중단] GPT 요금 충전 필요: {ce}"
-        await redis_manager.publish(task_id, error_msg)
+        await redis_manager.publish(task_id, error_msg, user_system_id)
         await log_to_db(user.current_user_id, user.external_id, "GPT 에러", error_msg, status="CRITICAL")
 
     except BlogIdError as be:
         # 🧨 [지피티 요금 부족 시 처리]
         error_msg = f"🛑 [시스템 중단] 네이버 블로그 글쓰기 아이디 확인 필요 : {be}"
-        await redis_manager.publish(task_id, error_msg)
+        await redis_manager.publish(task_id, error_msg, user_system_id)
         await log_to_db(user.current_user_id, user.external_id, "네이버 블로그 글쓰기 아이디 에러", error_msg, status="CRITICAL")
 
     except Exception as global_e:
         # 예상치 못한 전체 프로세스 에러 발생 시 로그
         print(f"🚨 [FATAL ERROR] {task_id} 프로세스 중단: {str(global_e)}")
         # 🧨 고칠 곳
-        await redis_manager.publish(task_id, f"🚨 시스템 오류로 작업이 중단되었습니다: {str(global_e)}")
+        await redis_manager.publish(task_id, f"🚨 시스템 오류로 작업이 중단되었습니다: {str(global_e)}", user_system_id)
 
     finally:
         # 1. 🛑 [보완] 브라우저 확실히 닫기
@@ -464,11 +548,12 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
 
         # SSE 연결 종료 신호
         print("모든 로직이 완료되어 SSE 서버를 끊습니다.")
+        await redis_manager.publish(task_id, "🏁 모든 블로그 포스팅 작업이 완료되었습니다.", user_system_id)
         await redis_manager.stop_task(task_id) # QUIT 전송
 
 
 # PIL을 이용한 이미지 생성 로직
-async def generate_blog_images(naver_id:str, blog_data: dict, task_id: str):
+async def generate_blog_images(naver_id:str, blog_data: dict, task_id: str, user_id: str):
     """중복 방지를 위해 UUID와 타임스탬프를 적용한 이미지 생성 로직입니다."""
     if not blog_data or "sections" not in blog_data:
         return blog_data
@@ -488,7 +573,7 @@ async def generate_blog_images(naver_id:str, blog_data: dict, task_id: str):
         wrapped_text = get_smart_wrapped_text(text_to_draw)
 
         try:
-            await redis_manager.publish(task_id, f"🖼️ {current_count}번째 유니크 이미지 생성 중...")
+            await redis_manager.publish(task_id, f"🖼️ {current_count}번째 유니크 이미지 생성 중...", user_id)
             
             # 1. 파일명 단축 (ID앞자리 + 현재초 + 순번)
             # 예: img_v2_3456_1.png
@@ -537,7 +622,7 @@ async def generate_blog_images(naver_id:str, blog_data: dict, task_id: str):
 
         except Exception as e:
             print(f"이미지 생성 실패: {e}")
-            await redis_manager.publish(task_id, f"⚠️ {current_count}번 이미지 중복 생성 방지 처리 실패")
+            await redis_manager.publish(task_id, f"⚠️ {current_count}번 이미지 중복 생성 방지 처리 실패", user_id)
             sec["image_url"] = None
     
     return blog_data

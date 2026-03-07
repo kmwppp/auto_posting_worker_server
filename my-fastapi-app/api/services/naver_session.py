@@ -8,7 +8,7 @@ async def save_naver_session(naver_id, naver_pw, current_user_id, task_id, proxy
     async with async_playwright() as p:
         print(f"🔐 {naver_id} 로그인 세션 생성 중...")
         # Redis 전송
-        await redis_manager.publish(task_id, f"🔐 [{naver_id}] 네이버 로그인 시도 중...")
+        await redis_manager.publish(task_id, f"🔐 [{naver_id}] 네이버 로그인 시도 중...", current_user_id)
         # DB 로그 기록
         await log_to_db(current_user_id, naver_id, f"세션 생성 ID: {naver_id}", "네이버 로그인 브라우저 실행 중")
 
@@ -82,14 +82,14 @@ async def save_naver_session(naver_id, naver_pw, current_user_id, task_id, proxy
             await browser.close()
             
             print(f"✅ {naver_id} 세션 저장 완료")
-            await redis_manager.publish(task_id, f"✅ [{naver_id}] 로그인 성공 및 세션 확보")
+            await redis_manager.publish(task_id, f"✅ [{naver_id}] 로그인 성공 및 세션 확보", current_user_id)
             await log_to_db(current_user_id, naver_id, f"세션 생성 ID: {naver_id}", "네이버 로그인 세션 생성 완료")
             
             return auth_path
 
         except Exception as e:
             print(f"❌ {naver_id} 로그인 실패: {e}")
-            await redis_manager.publish(task_id, f"❌ [{naver_id}] 로그인 실패. (비번 확인 또는 2차 인증 필요)")
+            await redis_manager.publish(task_id, f"❌ [{naver_id}] 로그인 실패. (비번 확인 또는 2차 인증 필요)", current_user_id)
             await browser.close()
             await log_to_db(current_user_id, naver_id, f"세션 생성 ID: {naver_id}", f"로그인 세션 생성 실패: {str(e)}", status="FAIL", error=e)
             return None

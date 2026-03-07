@@ -18,14 +18,32 @@ class BlogIdError(Exception):
 async def human_delay(min_sec=0.5, max_sec=1.5):
     await asyncio.sleep(random.uniform(min_sec, max_sec))
 
-async def human_typing(page, text, delay_range=(50, 150)):
-    # 🔎 현재 포커스 확인 함수
+async def human_mouse_move(page, start=None, end=None, steps=20):
+    width = 1200
+    height = 800
+
+    if start is None:
+        start = (random.randint(100, width-100), random.randint(100, height-100))
+    if end is None:
+        end = (random.randint(100, width-100), random.randint(100, height-100))
+
+    x1, y1 = start
+    x2, y2 = end
+
+    for i in range(steps):
+        x = x1 + (x2-x1) * (i/steps) + random.uniform(-3,3)
+        y = y1 + (y2-y1) * (i/steps) + random.uniform(-3,3)
+        await page.mouse.move(x, y)
+        await asyncio.sleep(random.uniform(0.01,0.03))
+
+async def human_typing(page, text):
+
+    # 🔎 현재 포커스 확인
     async def ensure_focus():
         active = await page.evaluate("document.activeElement && document.activeElement.tagName")
         if active in ["TEXTAREA", "DIV"]:
             return True
 
-        # 입력 가능한 요소가 있으면 첫 번째 클릭
         locator = page.locator("textarea, [contenteditable='true']").first
         if await locator.count() > 0:
             try:
@@ -35,54 +53,72 @@ async def human_typing(page, text, delay_range=(50, 150)):
                 return False
         return False
 
-    # 포커스 확보 시도
     await ensure_focus()
 
     # ===============================
-    # 70% 직접 타이핑 모드
+    # 입력 모드 선택
     # ===============================
-    if len(text) < 10 or random.random() < 0.7:
-        print(f"⌨️ 타이핑 모드 작동 중... (길이: {len(text)})")
+    mode = random.choice(["typing", "paste", "burst"])
+
+    print(f"⌨️ 입력 모드: {mode} (길이: {len(text)})")
+
+    # ===============================
+    # 1️⃣ 타이핑 모드
+    # ===============================
+    if mode == "typing":
 
         for char in text:
             try:
-                await page.keyboard.type(char, delay=random.uniform(10, 30))
+                await page.keyboard.type(char, delay=random.uniform(20, 80))
             except:
-                # 포커스 날아가면 복구 후 재시도
                 await ensure_focus()
-                await page.keyboard.type(char, delay=random.uniform(10, 30))
+                await page.keyboard.type(char, delay=random.uniform(20, 80))
 
-            delay = random.uniform(delay_range[0], delay_range[1]) / 1000
-            if random.random() < 0.05:
-                delay += random.uniform(0.2, 0.5)
-            await asyncio.sleep(delay)
+            await asyncio.sleep(random.uniform(0.03, 0.12))
+
+            # 인간 pause
+            if random.random() < 0.04:
+                await asyncio.sleep(random.uniform(0.2, 0.6))
+
 
     # ===============================
-    # 복붙 모드 (Timeout 완전 방어)
+    # 2️⃣ 복붙 모드
     # ===============================
-    else:
-        await asyncio.sleep(random.uniform(0.5, 1.0))
+    elif mode == "paste":
 
-        print(f"📋 인간형 복붙 실행 (길이: {len(text)})")
+        await asyncio.sleep(random.uniform(0.5, 1.2))
 
         try:
             await ensure_focus()
-            # 🔹 여기서부터 실제 입력 시작
             await page.keyboard.insert_text(text)
-            # 🔹 렌더링 대기
-            await asyncio.sleep(0.3)
-
         except Exception as e:
-            print(f"⚠️ insert_text 실패 → 빠른 타이핑 fallback: {e}")
-            await ensure_focus()
-            await page.keyboard.type(text, delay=random.uniform(1, 3))
+            print(f"⚠️ insert_text 실패 → typing fallback: {e}")
+            await page.keyboard.type(text, delay=random.uniform(5, 20))
 
-        wait_time = min(2.0, 0.5 + (len(text) * 0.005))
-        await asyncio.sleep(random.uniform(wait_time * 0.8, wait_time * 1.2))
+        await asyncio.sleep(random.uniform(0.5, 1.5))
 
-        if random.random() < 0.2:
+
+    # ===============================
+    # 3️⃣ burst 모드 (사람이 빠르게 치는 느낌)
+    # ===============================
+    elif mode == "burst":
+
+        words = text.split(" ")
+
+        for part in words:
+            try:
+                await page.keyboard.type(part)
+                await page.keyboard.press("Space")
+            except:
+                await ensure_focus()
+                await page.keyboard.type(part)
+
+            await asyncio.sleep(random.uniform(0.1, 0.4))
+
+        # 가끔 커서 이동
+        if random.random() < 0.25:
             await page.keyboard.press("ArrowLeft")
-            await asyncio.sleep(random.uniform(0.1, 0.2))
+            await asyncio.sleep(random.uniform(0.1, 0.3))
             await page.keyboard.press("ArrowRight")
 
 async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, current_user_id, task_id, short_url=None, base_delay=5, image_dir="./static/blog_images"):
@@ -106,7 +142,7 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
             msg = f"❌ [아이디 오류] 존재하지 않는 블로그 아이디입니다. (HTTP 404: {blog_id})"
             print(msg)
             await log_to_db(current_user_id, naver_id, title, msg, status="FAIL")
-            await redis_manager.publish(task_id, msg)
+            await redis_manager.publish(task_id, msg, current_user_id)
             # 🧨 return 대신 raise로 상위 로직에 에러를 던집니다.
             raise BlogIdError(msg)
 
@@ -115,7 +151,7 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
             msg = f"❌ [아이디 오류] 블로그 메인으로 리다이렉트되었습니다. 아이디 '{blog_id}'를 확인하세요."
             print(msg)
             await log_to_db(current_user_id, naver_id, title, msg, status="FAIL")
-            await redis_manager.publish(task_id, msg)
+            await redis_manager.publish(task_id, msg, current_user_id)
             # 🧨 여기도 마찬가지로 raise!
             raise BlogIdError(msg)
     
@@ -184,7 +220,7 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
         
         # 일정한 delay 대신 human_typing 사용
         await human_typing(page, title)
-        await redis_manager.publish(task_id, f"📝 포스팅 제목 작성 완료")
+        await redis_manager.publish(task_id, f"📝 포스팅 제목 작성 완료", current_user_id)
     except Exception as e:
         # 실패 시 좌표 클릭도 랜덤성을 줌
         await page.mouse.click(400 + random.randint(-5, 5), 250 + random.randint(-5, 5))
@@ -196,19 +232,20 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
     await check_abort(task_id)
 
     # 2. 서론 입력
-    await human_typing(page, introduction, (30, 80))
+    await human_typing(page, introduction)
     await page.keyboard.press("Enter")
-    enter_count = random.randint(2, 5)
-    for _ in range(enter_count):
+    for _ in range(random.randint(1,4)):
         await page.keyboard.press("Enter")
-        # 연타 사이에도 아주 미세한 지연(0.03~0.1초)을 주어 기계적인 느낌 제거
-        await asyncio.sleep(random.uniform(0.03, 0.1))
+        if random.random() < 0.4:
+            await asyncio.sleep(random.uniform(0.3,1.0))
+
     await human_delay(0.5, 1.0)
 
     # 3. QR/단축 URL 삽입
     if short_url:
         try:
-            await human_typing(page, link_top_text)
+            msg = f"{link_top_text}"
+            await page.keyboard.type(msg, delay=60)
             await page.keyboard.press("Enter")
             await human_delay(1.5, 2.5) # 링크 버튼 누르기 전 고민하는 척
 
@@ -218,6 +255,8 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
             input_selector = 'input.se-popup-oglink-input'
             await target_frame.wait_for_selector(input_selector, state="visible")
             await human_delay(0.5, 1.2)
+
+            short_url = short_url.replace(" ", "").strip()
             
             # 링크는 붙여넣기가 자연스러움
             await target_frame.locator(input_selector).fill(short_url)
@@ -231,24 +270,31 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
             await confirm_btn.click()
 
             await human_delay(base_delay, base_delay + 2)
-            await redis_manager.publish(task_id, "🔗 본문에 QR 링크(단축URL) 삽입 완료")
+            await redis_manager.publish(task_id, "🔗 본문에 QR 링크(단축URL) 삽입 완료", current_user_id)
         except Exception as e:
             await save_debug_screenshot(page, "qr_failed", current_user_id)
-            await redis_manager.publish(task_id, "⚠️ QR 링크 삽입 중 오류 발생 (건너뜀)")
+            await redis_manager.publish(task_id, "⚠️ QR 링크 삽입 중 오류 발생 (건너뜀)", current_user_id)
     
-    # 커서 최하단 이동
+    # 커서 최하단 이동 (수정 제안)
     try:
+        # 마지막 문단(p태그) 찾기
         last_p = target_frame.locator('.se-component.se-text').last
         await last_p.scroll_into_view_if_needed()
-        box = await last_p.bounding_box()
-        if box:
-            await page.mouse.click(box['x'] + (box['width'] / 2), box['y'] + box['height'] + 10)
-    except:
+        
+        # [수정] 좌표 계산 클릭 대신, 마지막 문단의 끝부분(오른쪽)을 클릭
+        # 이렇게 하면 글감 버튼을 누를 확률이 제로에 가깝습니다.
+        await last_p.click(position={'x': 10, 'y': 10}) # 문단의 왼쪽 상단 안전하게 클릭
+        
+        await page.keyboard.press("End") # 문장의 끝으로 이동
+        for _ in range(2): 
+            await page.keyboard.press("Enter") # 새 줄 만들기
+            
+    except Exception as e:
+        print(f"커서 이동 중 예외 발생: {e}")
         await target_frame.locator('body').click()
 
-    await page.keyboard.press("End") 
-    for _ in range(3): await page.keyboard.press("ArrowDown")
-    await page.keyboard.press("Enter")
+    # 보험: 그래도 팝업이 떴다면 여기서 컷!
+    await close_movie_popup(target_frame)
 
     # 4. 섹션 반복 (인용구 + 이미지 + 본문)
     for i, section in enumerate(sections):
@@ -270,66 +316,40 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
             
             try:
                 if os.path.exists(img_path):
-                    # 1. 자연스러운 준비 과정
                     await page.keyboard.press("Escape")
-                    await asyncio.sleep(random.uniform(0.5, 1.2)) # 잠시 멈춤
                     await page.keyboard.press("End")
-                    await asyncio.sleep(random.uniform(0.8, 1.5)) # 스크롤 후 대기
-
-                    # 2. 버튼 찾기 및 마우스 이동 시뮬레이션
                     photo_btn = target_frame.locator('button[data-name="image"]').first
-                    await photo_btn.scroll_into_view_if_needed()
-                    
-                    # 버튼 위로 마우스를 올리는(Hover) 동작 추가 (매우 중요)
-                    await photo_btn.hover()
-                    await asyncio.sleep(random.uniform(0.3, 0.8))
-
-                    # 3. 실제 클릭 시뮬레이션 (dispatch_event 대신 click 사용)
                     async with page.expect_file_chooser() as fc_info:
-                        # 인간처럼 약간의 딜레이를 두고 클릭
-                        await photo_btn.click(delay=random.randint(150, 300)) 
-                    
+                        await photo_btn.dispatch_event("click") 
                     file_chooser = await fc_info.value
-                    
-                    # 4. 파일 선택 전 '고민하는' 시간 추가
-                    await asyncio.sleep(random.uniform(1.0, 2.5))
                     await file_chooser.set_files(img_path)
-                    
-                    # 5. 업로드 대기 (일정한 7초가 아닌 랜덤 범위 적용)
-                    # 파일 크기에 따라 업로드 시간이 다른 것처럼 보이게 함
-                    upload_delay = random.uniform(5.0, 9.0) + base_delay
-                    print(f"📸 이미지 업로드 중... ({upload_delay:.1f}초 대기)")
-                    await asyncio.sleep(upload_delay) 
-                    
-                    # 6. 마무리 동작
+                    await asyncio.sleep(7 + base_delay)
                     await page.keyboard.press("End")
-                    await asyncio.sleep(random.uniform(0.5, 1.0))
+                    await human_delay(1.0, 2.5)
                     await page.keyboard.press("Enter")
-                    
+                    await human_delay(1.0, 2.5)
             except Exception as e:
-                print(f"❌ 이미지 업로드 실패: {e}")
                 await save_debug_screenshot(page, f"img_failed_{i}", current_user_id)
             finally:
-                # 파일 삭제 로직은 동일
                 if os.path.exists(img_path):
                     try: os.remove(img_path)
                     except: pass
         
-        await human_typing(page, section.get("content", ""), (20, 50))
+        await human_typing(page, section.get("content", ""))
         await human_delay(1.0, 2.5)
-        enter_count = random.randint(2, 5)
-        for _ in range(enter_count):
+        for _ in range(random.randint(1,4)):
             await page.keyboard.press("Enter")
-            # 연타 사이에도 아주 미세한 지연(0.03~0.1초)을 주어 기계적인 느낌 제거
-            await asyncio.sleep(random.uniform(0.03, 0.1))
 
-        await redis_manager.publish(task_id, f"✅ {i+1}번 섹션 작성 완료")
+            if random.random() < 0.4:
+                await asyncio.sleep(random.uniform(0.3,1.0))
+
+        await redis_manager.publish(task_id, f"✅ {i+1}번 섹션 작성 완료", current_user_id)
 
     await check_abort(task_id)
     if conclusion:
-        await human_typing(page, conclusion, (30, 80)) # 이 부분 수정!
+        await human_typing(page, conclusion) # 이 부분 수정!
         await page.keyboard.press("Enter")
-        await redis_manager.publish(task_id, "🏁 결론 작성 완료")
+        await redis_manager.publish(task_id, "🏁 결론 작성 완료", current_user_id)
 
     # 5. 강조 문구 서식 적용 (폰트 19px, 빨간색)
     try:
@@ -382,6 +402,9 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
 
     await check_abort(task_id)
 
+    # 발행전 혹시나 영화검색 팝업이 떠있으면 팝업 제거
+    await close_movie_popup(target_frame)
+
     # 6. 발행
     print("📤 발행 시도 중...")
     try:
@@ -401,8 +424,17 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
             publish_btn = target_frame.locator('button[class*="publish_btn"]').filter(has_text="발행")
         
         # 3. 인간적인 확인 시간 (발행 전 2~4초간 멈춤)
-        await publish_btn.scroll_into_view_if_needed()
-        await asyncio.sleep(random.uniform(2.0, 4.0)) 
+        box = await publish_btn.bounding_box()
+
+        if box:
+            await human_mouse_move(page)
+            await human_mouse_move(
+                page,
+                end=(box["x"] + box["width"]/2, box["y"] + box["height"]/2),
+                steps=random.randint(20,35)
+            )
+
+        await asyncio.sleep(random.uniform(0.5,1.2))
         
         # 4. 첫 번째 발행 버튼 클릭 (실제 마우스 클릭 모사)
         await publish_btn.hover() # 버튼 위로 마우스 이동
@@ -431,10 +463,25 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
         print(f"🎉 발행 버튼 클릭 완료. {post_delay:.1f}초간 결과 대기 후 종료합니다.")
         await asyncio.sleep(post_delay)
 
-        await redis_manager.publish(task_id, "🎉 네이버 블로그 포스팅 발행 완료!")
+        await redis_manager.publish(task_id, "🎉 네이버 블로그 포스팅 발행 완료!", current_user_id)
         await record_success_count(current_user_id, naver_id, title)
 
     except Exception as e:
         await save_debug_screenshot(page, "final_real_error", current_user_id)
         print(f"❌ 발행 오류 발생: {str(e)}")
-        await redis_manager.publish(task_id, f"❌ 발행 오류: {str(e)}")
+        await redis_manager.publish(task_id, f"❌ 발행 오류: {str(e)}", current_user_id)
+
+
+async def close_movie_popup(target_frame):
+    try:
+        # 1. 팝업 닫기 버튼을 찾습니다.
+        close_btn = target_frame.locator('button.se-popup-flayer-close-button[data-log="matflt*sch.close"]')
+        
+        # 2. 팝업이 화면에 있는지 확인합니다.
+        if await close_btn.is_visible(timeout=2000):
+            print("🎬 영화 검색 팝업 감지됨. 닫는 중...")
+            await close_btn.click(force=True)
+            await asyncio.sleep(0.5)
+            print("✅ 팝업 닫기 완료")
+    except Exception as e:
+        print(f"ℹ️ 팝업 닫기 처리 중 특이사항 없음: {e}")

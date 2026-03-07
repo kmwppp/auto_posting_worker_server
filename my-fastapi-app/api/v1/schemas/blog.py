@@ -2,6 +2,7 @@ from enum import Enum
 from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
+from api.db.database import Base
 
 # --- 블로그 관련 스키마 정의 ---
 

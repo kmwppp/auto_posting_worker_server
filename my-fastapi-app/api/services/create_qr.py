@@ -6,7 +6,7 @@ import random
 
 async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, base_delay=5):
     print("🌐 네이버 QR 생성 중 (ID 기반 버전)...")
-    await redis_manager.publish(task_id, "📱 네이버 QR 코드 생성 프로세스를 시작합니다...")
+    await redis_manager.publish(task_id, "📱 네이버 QR 코드 생성 프로세스를 시작합니다...", current_user_id)
 
     # [함수 내보조 함수] 인간적인 대기
     async def human_wait(min_sec=1.0, max_sec=3.0):
@@ -35,7 +35,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         
         # 1. 페이지 접속
         queue_message = "🌐 QR 생성 페이지 접속 시도 중..."
-        await redis_manager.publish(task_id, f"{queue_message}")
+        await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         for attempt in range(3):
             try:
                 # 접속 전 랜덤 대기
@@ -54,7 +54,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         await asyncio.sleep(random.uniform(1.0, 1.5) * pivot)
 
         queue_message = "⚙️ QR 설정 단계 이동 중 (1/3)..."
-        await redis_manager.publish(task_id, f"{queue_message}")
+        await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         btn1 = page.locator(next_btn_selector).first
         await btn1.wait_for(state="visible", timeout=30000)
         await btn1.click(force=True)
@@ -66,7 +66,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         await asyncio.sleep(random.uniform(0.7, 1.2) * pivot)
 
         queue_message = "⚙️ QR 설정 단계 이동 중 (2/3)..."
-        await redis_manager.publish(task_id, f"{queue_message}")
+        await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         await asyncio.sleep(2) # 프록시 환경 안정화 대기
         btn2 = page.locator(next_btn_selector).first
         await btn2.wait_for(state="visible", timeout=30000)
@@ -79,7 +79,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         await asyncio.sleep(random.uniform(1.2, 2.0) * pivot)
 
         queue_message = "📝 QR 코드에 링크(워드프레스) 연결 중..."
-        await redis_manager.publish(task_id, f"{queue_message}")
+        await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         title_input = page.locator('input[name="sections[0].title"]')
         await title_input.wait_for(state="visible", timeout=10000)
         await title_input.fill("확인하기")
@@ -93,7 +93,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         await asyncio.sleep(random.uniform(0.7, 1.2) * pivot)
 
         queue_message = "⚙️ 링크를 첨부하는 중..."
-        await redis_manager.publish(task_id, f"{queue_message}")
+        await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         attach_btn = page.locator('button:has-text("링크첨부")').first
         await attach_btn.wait_for(state="visible", timeout=10000)
         await attach_btn.click(force=True)
@@ -111,7 +111,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         await asyncio.sleep(random.uniform(2.0, 4.0) * pivot)
         
         queue_message = "⚙️ QR 생성 버튼을 클릭하고 예외를 확인하는 중..."
-        await redis_manager.publish(task_id, f"{queue_message}")
+        await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         for attempt in range(3):
             final_btn = page.locator(next_btn_selector).first
             # [수정 포인트 2] 마지막 버튼도 스크롤 및 보임 상태 확인 필수
@@ -127,7 +127,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
             limit_popup = page.locator('div:has-text("일일 QR코드 생성량을 초과")').first
             if await limit_popup.is_visible(timeout=2000):
                 error_msg = "🚫 일일 QR 생성 한도 초과! (원본 URL 대체)"
-                await redis_manager.publish(task_id, error_msg)
+                await redis_manager.publish(task_id, error_msg, current_user_id)
                 await log_to_db(current_user_id, naver_id, "네이버 QR 생성 실패", "일일 한도 초과", status="FAIL")
                 try: await page.locator('button:has-text("확인")').first.click()
                 except: pass
@@ -163,7 +163,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         
         # 6. 결과 페이지에서 단축 URL 추출
         queue_message = "🔍 생성된 단축 URL 추출 중..."
-        await redis_manager.publish(task_id, f"{queue_message}")
+        await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         qr_url = None
         try:
             await page.wait_for_url("**/success-qr/**", timeout=(20 + base_delay) * 1000)
@@ -185,7 +185,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
             print(f"❌ 추출 프로세스 오류: {e}")
 
         if qr_url:
-            await redis_manager.publish(task_id, f"✅ QR 생성 성공: {qr_url}")
+            await redis_manager.publish(task_id, f"✅ QR 생성 성공: {qr_url}", current_user_id)
             await log_to_db(current_user_id, naver_id, "네이버 QR 링크 생성 성공", "QR 링크 완료")
             return qr_url
         else:
@@ -193,7 +193,7 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
             return wp_url
 
     except Exception as e:
-        await redis_manager.publish(task_id, f"⚠️ 현재 위치: {queue_message}")
-        await redis_manager.publish(task_id, f"❌ QR 생성 실패: {str(e)[:50]}...")
+        await redis_manager.publish(task_id, f"⚠️ 현재 위치: {queue_message}", current_user_id)
+        await redis_manager.publish(task_id, f"❌ QR 생성 실패: {str(e)[:50]}...", current_user_id)
         await log_to_db(current_user_id, naver_id, "네이버 QR 링크 생성 실패", f"QR 실패: {str(e)}", status="FAIL", error=e)
         return wp_url

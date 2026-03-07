@@ -8,11 +8,20 @@ from api.v1.dependencies.redis_manager import redis_manager
 from api.v1.schemas.blog import BlogBulkRequest
 from api.services.blog_service import start_bulk_posting
 
+async def connect_redis():
+    for _ in range(5):
+        try:
+            await redis_manager.connect()
+            return
+        except Exception:
+            await asyncio.sleep(2)
+    raise Exception("Redis connection failed")
+
 async def worker_process():
     """일꾼: 작업 딱 1개만 하고 스스로 종료함"""
     try:
         # 1. Redis 연결
-        await redis_manager.connect() 
+        await connect_redis()
         print(f"🚀 [일꾼 {multiprocessing.current_process().name}] Redis 연결 성공!")
         
         # 2. 작업 하나 가져오기 (무한루프 while True 제거됨)
@@ -44,7 +53,13 @@ async def worker_process():
         print(f"🚨 [일꾼] 치명적 에러: {e}")
     finally:
         # 연결 해제 후 프로세스 종료 (자연스럽게 죽음)
-        await redis_manager.disconnect()
+        try:
+            await redis_manager.disconnect()
+        except Exception:
+            pass
+
+def run_worker():
+    asyncio.run(worker_process())
 
 def main():
     num_workers = 50
@@ -64,10 +79,10 @@ def main():
             while len(processes) < num_workers:
                 # 프로세스 이름에 타임스탬프를 넣어 중복 방지
                 p = multiprocessing.Process(
-                    target=lambda: asyncio.run(worker_process()), 
+                    target=run_worker,
                     name=f"Worker-{time.time()}"
                 )
-                p.daemon = True 
+                # p.daemon = True 
                 p.start()
                 processes[p.pid] = p
                 print(f"➕ 새 일꾼 투입 (PID: {p.pid}). 총 일꾼: {len(processes)}명")

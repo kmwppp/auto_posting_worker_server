@@ -5,6 +5,7 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from datetime import datetime
+from sqlalchemy.sql import func
 
 load_dotenv()
 
@@ -60,6 +61,27 @@ async def insert_posting_log(db: AsyncSession, **kwargs):
         )
         db.add(new_log)
         await db.commit()
+    except Exception as e:
+        await db.rollback()
+        print(f"⚠️ DB 로그 저장 실패: {e}")
+
+class RedisLog(Base):
+    __tablename__ = "redis_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String(50), index=True, nullable=False) # 사용자 ID 추가
+    task_id = Column(String(100), index=True, nullable=False)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+async def publish_and_log(db, user_id, task_id, message):
+    """DB에 로그 남기기 처리"""
+    # DB 저장
+    try:
+        new_log = RedisLog(user_id=user_id, task_id=task_id, message=message)
+        db.add(new_log)
+        await db.commit()
+        
     except Exception as e:
         await db.rollback()
         print(f"⚠️ DB 로그 저장 실패: {e}")
