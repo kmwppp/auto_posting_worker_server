@@ -4,6 +4,11 @@ from api.v1.dependencies.redis_manager import redis_manager
 from api.services.utils import log_to_db, save_debug_screenshot
 import random
 
+from api.services.utils import (
+    check_abort
+)
+
+
 async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, base_delay=5):
     print("🌐 네이버 QR 생성 중 (ID 기반 버전)...")
     await redis_manager.publish(task_id, "📱 네이버 QR 코드 생성 프로세스를 시작합니다...", current_user_id)
@@ -53,6 +58,8 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         # 2. 1단계 -> 2단계 이동 (기본정보 입력 단계 진입)
         await asyncio.sleep(random.uniform(1.0, 1.5) * pivot)
 
+        await check_abort(task_id)
+
         queue_message = "⚙️ QR 설정 단계 이동 중 (1/3)..."
         await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
         btn1 = page.locator(next_btn_selector).first
@@ -64,6 +71,8 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
 
         # 3. 2단계 -> 3단계 이동 (추가정보 입력 단계 진입)
         await asyncio.sleep(random.uniform(0.7, 1.2) * pivot)
+
+        await check_abort(task_id)
 
         queue_message = "⚙️ QR 설정 단계 이동 중 (2/3)..."
         await redis_manager.publish(task_id, f"{queue_message}", current_user_id)
@@ -97,6 +106,8 @@ async def get_naver_qr_url(page, wp_url, current_user_id, naver_id, task_id, bas
         attach_btn = page.locator('button:has-text("링크첨부")').first
         await attach_btn.wait_for(state="visible", timeout=10000)
         await attach_btn.click(force=True)
+
+        await check_abort(task_id)
 
         # 링크 첨부 후 '확인' 팝업 대응
         await asyncio.sleep(random.uniform(1.0, 1.5) * pivot)

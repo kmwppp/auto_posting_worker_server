@@ -36,7 +36,7 @@ async def human_mouse_move(page, start=None, end=None, steps=20):
         await page.mouse.move(x, y)
         await asyncio.sleep(random.uniform(0.01,0.03))
 
-async def human_typing(page, text):
+async def human_typing(page, text, isTitle=False):
 
     # 🔎 현재 포커스 확인
     async def ensure_focus():
@@ -58,13 +58,16 @@ async def human_typing(page, text):
     # ===============================
     # 입력 모드 선택
     # ===============================
-    mode = random.choice(["typing", "paste", "burst"])
+    if isTitle:
+        mode = "paste"
+    else:
+        mode = random.choice(["typing", "paste", "burst"])
 
-    print(f"⌨️ 입력 모드: {mode} (길이: {len(text)})")
+    print(f"⌨️ 입력 모드: {mode} (제목 여부: {isTitle}, 길이: {len(text)})")
 
-    # ===============================
-    # 1️⃣ 타이핑 모드
-    # ===============================
+    # # ===============================
+    # # 1️⃣ 타이핑 모드
+    # # ===============================
     if mode == "typing":
 
         for char in text:
@@ -85,12 +88,25 @@ async def human_typing(page, text):
     # 2️⃣ 복붙 모드
     # ===============================
     elif mode == "paste":
-
-        await asyncio.sleep(random.uniform(0.5, 1.2))
-
+        await asyncio.sleep(random.uniform(0.5, 1.0))
         try:
             await ensure_focus()
-            await page.keyboard.insert_text(text)
+            
+            # 클립보드 권한 및 데이터 쓰기
+            await page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+            await page.evaluate("async (t) => { await navigator.clipboard.writeText(t); }", text)
+            
+            # 사람이 붙여넣기 전 0.3초 정도 멈칫하는 느낌
+            await asyncio.sleep(random.uniform(0.3, 0.5))
+            
+            # 물리적 붙여넣기
+            modifier = "Meta" if "Mac" in await page.evaluate("navigator.platform") else "Control"
+            await page.keyboard.press(f"{modifier}+V")
+            
+            # 붙여넣은 후 네이버 에디터가 텍스트를 처리할 시간을 줌 (매우 중요)
+            await asyncio.sleep(random.uniform(1.0, 2.0))
+            
+            print(f"✅ '👇...' 문구 완벽하게 붙여넣기 성공")
         except Exception as e:
             print(f"⚠️ insert_text 실패 → typing fallback: {e}")
             await page.keyboard.type(text, delay=random.uniform(5, 20))
@@ -115,11 +131,13 @@ async def human_typing(page, text):
 
             await asyncio.sleep(random.uniform(0.1, 0.4))
 
-        # 가끔 커서 이동
-        if random.random() < 0.25:
-            await page.keyboard.press("ArrowLeft")
-            await asyncio.sleep(random.uniform(0.1, 0.3))
-            await page.keyboard.press("ArrowRight")
+    
+
+    # 가끔 커서 이동
+    if random.random() < 0.25:
+        await page.keyboard.press("ArrowLeft")
+        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await page.keyboard.press("ArrowRight")
 
 async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, current_user_id, task_id, short_url=None, base_delay=5, image_dir="./static/blog_images"):
     title = blog_data.get("title", "블로그 포스팅")
@@ -219,7 +237,7 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
         await human_delay(0.8, 1.5)
         
         # 일정한 delay 대신 human_typing 사용
-        await human_typing(page, title)
+        await human_typing(page, title, isTitle=True)
         await redis_manager.publish(task_id, f"📝 포스팅 제목 작성 완료", current_user_id)
     except Exception as e:
         # 실패 시 좌표 클릭도 랜덤성을 줌
@@ -228,13 +246,22 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
         await human_typing(page, title)
     
     await page.keyboard.press("Enter")
+
+    for _ in range(random.randint(2,5)):
+        await page.keyboard.press("Enter")
+        if random.random() < 0.4:
+            await asyncio.sleep(random.uniform(0.3,1.0))
+            
     await human_delay(1.0, 2.0)
     await check_abort(task_id)
 
     # 2. 서론 입력
     await human_typing(page, introduction)
+    # [수정] 복붙 후 네이버 에디터가 텍스트를 완전히 인식할 시간을 줍니다.
+    await asyncio.sleep(random.uniform(1.2, 1.8))
+
     await page.keyboard.press("Enter")
-    for _ in range(random.randint(1,4)):
+    for _ in range(random.randint(2,5)):
         await page.keyboard.press("Enter")
         if random.random() < 0.4:
             await asyncio.sleep(random.uniform(0.3,1.0))
@@ -244,10 +271,24 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
     # 3. QR/단축 URL 삽입
     if short_url:
         try:
-            msg = f"{link_top_text}"
-            await page.keyboard.type(msg, delay=60)
+
+            # [추가] 서론과 붙지 않도록 미리 엔터 한 번 더
             await page.keyboard.press("Enter")
-            await human_delay(1.5, 2.5) # 링크 버튼 누르기 전 고민하는 척
+            await asyncio.sleep(0.5)
+            
+            # 링크 상단 멘트 작성 (human_typing 적용)
+            msg = f"\n{link_top_text}"
+
+            # 1. 단순 타이핑 대신 하이브리드 입력 함수 호출
+            await human_typing(page, msg)
+
+            # 2. 입력을 마친 후 엔터 (사람다운 딜레이 살짝 추가)
+            await asyncio.sleep(random.uniform(0.3, 0.7))
+            await page.keyboard.press("Enter")
+
+            # 3. 링크 버튼 누르기 전 고민하는 척 (기존 딜레이 유지 또는 강화)
+            # 여기서 멈춰 있는 동안 네이버 엔진은 "유저가 다음 메뉴를 찾는 중인가?"라고 생각하게 됩니다.
+            await human_delay(1.5, 3.0)
 
             link_btn = target_frame.locator('button[data-name="oglink"]')
             await link_btn.click() # force=True 제거 (가급적)
@@ -310,34 +351,53 @@ async def post_to_blog(link_top_text, page, blog_id, naver_id, blog_data, curren
             except:
                 await page.keyboard.type(f"■ {section['subtitle']}\n")
 
-        if section.get("image_url"):
-            file_name = section["image_url"].split('/')[-1]
-            img_path = os.path.abspath(os.path.join(image_dir, file_name))
-            
+        # --- [2] 이미지 업로드 (로컬 경로 방식) ---
+        # 이제 image_url 대신 image_path를 직접 확인합니다.
+        img_path = section.get("image_path")
+        
+        if img_path:
             try:
                 if os.path.exists(img_path):
+                    # 에디터 포커스 안정화
                     await page.keyboard.press("Escape")
                     await page.keyboard.press("End")
+                    
+                    # 사진 업로드 버튼 클릭 및 파일 선택
                     photo_btn = target_frame.locator('button[data-name="image"]').first
                     async with page.expect_file_chooser() as fc_info:
+                        # dispatch_event는 숨겨진 버튼도 잘 클릭해줍니다.
                         await photo_btn.dispatch_event("click") 
+                    
                     file_chooser = await fc_info.value
                     await file_chooser.set_files(img_path)
+                    
+                    # 업로드 대기 (네이버 서버로 올라가는 시간 필요)
+                    # AI 고화질 이미지는 용량이 클 수 있으므로 충분히 기다립니다.
                     await asyncio.sleep(7 + base_delay)
+                    
+                    # 업로드 후 커서를 이미지 아래로 이동
                     await page.keyboard.press("End")
-                    await human_delay(1.0, 2.5)
+                    await human_delay(1.0, 2.0)
                     await page.keyboard.press("Enter")
-                    await human_delay(1.0, 2.5)
+                    
+                    print(f"✅ {i+1}번 섹션 이미지 업로드 성공: {os.path.basename(img_path)}")
+                else:
+                    print(f"⚠️ 이미지가 존재하지 않음: {img_path}")
             except Exception as e:
+                print(f"❌ 이미지 업로드 중 에러: {e}")
                 await save_debug_screenshot(page, f"img_failed_{i}", current_user_id)
             finally:
-                if os.path.exists(img_path):
-                    try: os.remove(img_path)
-                    except: pass
+                # 업로드 완료 후 서버 용량 관리를 위해 로컬 파일 삭제
+                if img_path and os.path.exists(img_path):
+                    try: 
+                        os.remove(img_path)
+                        print(f"🧹 사용 완료된 로컬 파일 삭제: {os.path.basename(img_path)}")
+                    except: 
+                        pass
         
         await human_typing(page, section.get("content", ""))
         await human_delay(1.0, 2.5)
-        for _ in range(random.randint(1,4)):
+        for _ in range(random.randint(2,5)):
             await page.keyboard.press("Enter")
 
             if random.random() < 0.4:

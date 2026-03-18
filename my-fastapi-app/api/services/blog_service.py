@@ -25,7 +25,7 @@ from api.services.utils import (
 )
 
 # gpt 원고 생성 파일 임포트
-from api.services.gpt_create import generate_blog_content, ChatGptError
+from api.services.gpt_create import generate_blog_content, ChatGptError, generate_hybrid_blog_images
 
 # 워드프레스, 블로그 스팟 URL 서치 파일 임포트
 from api.services.url_search import get_wordpress_post_url, get_blogspot_post_url
@@ -150,21 +150,41 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
             auth_path = None
             # ✨ [유저별 예약 대기 로직 시작]
             if payload.postingTermType == PostingTermType.RESERVATION:
+                # 1. 랜덤 오프셋 계산 (-120초 ~ +120초)
+                random_offset = random.randint(-120, 120)
+                total_wait_seconds = (payload.postingTerm * 60) + random_offset
+                
+                # 2. 안전장치: 대기 시간이 너무 적어지지 않도록 최소 10초 보장
+                if total_wait_seconds < 10:
+                    total_wait_seconds = 10
+                
+                # 실제 대기할 분/초 계산 (로그 표시용)
+                display_minutes = total_wait_seconds // 60
+                display_seconds = total_wait_seconds % 60
+                wait_msg_detail = f"{display_minutes}분 {display_seconds}초" if display_seconds > 0 else f"{display_minutes}분"
+
+                # 3. 로그 및 DB 기록 (실제 대기 시간 반영)
+                log_msg = f"[{user.external_id}] 계정 작업 시작 전 {wait_msg_detail} 대기 중 (랜덤 보정 포함)..."
+                
                 await log_to_db(
                     user.current_user_id, 
                     user.external_id, 
                     "예약 대기", 
-                    f"[{user.external_id}] 계정 작업 시작 전 {payload.postingTerm}분 대기 중..."
+                    log_msg
                 )
-                msg = f"[{user.external_id}] 계정 작업 시작 전 {payload.postingTerm}분 대기 중..."
-                # 🧨 고칠 곳: manager.broadcast -> redis_manager.publish
-                await redis_manager.publish(task_id, msg, user_system_id)
+                
+                # 🧨 Redis 전송 및 짧은 휴식
+                await redis_manager.publish(task_id, log_msg, user_system_id)
                 await asyncio.sleep(0.1)
-                wait_seconds = payload.postingTerm * 60
-                # 🧨 1분 단위가 아니라 10초 단위로 쪼개서 체크하면 더 빠릿합니다.
-                for _ in range(0, wait_seconds, 10):
-                    await check_abort(task_id) # 여기서 멈추면 바로 finally로!
-                    await asyncio.sleep(10)
+
+                # 4. 10초 단위 쪼개기 대기 로직
+                for i in range(0, total_wait_seconds, 10):
+                    await check_abort(task_id)  # 중단 체크
+                    
+                    # 남은 시간이 10초보다 적으면 남은 만큼만 sleep
+                    remaining = total_wait_seconds - i
+                    sleep_time = 10 if remaining >= 10 else remaining
+                    await asyncio.sleep(sleep_time)
             # ✨ [유저별 예약 대기 로직 끝]
 
             proxy_config = get_proxy_config(payload, user)
@@ -246,7 +266,17 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                 # 🧨 고칠 곳
                 await redis_manager.publish(task_id, f"🎨 이미지 생성 중...", user_system_id)
                 await asyncio.sleep(0.1)
-                blog_data = await generate_blog_images(user.current_user_id, blog_data, task_id, user_system_id)
+                # blog_data = await generate_blog_images(user.current_user_id, blog_data, task_id, user_system_id)
+
+                # blog_data = await generate_blog_images_ai(user.external_id, blog_data, task_id, user_system_id, client)
+                # 새로운 하이브리드 함수 호출
+                blog_data = await generate_hybrid_blog_images(
+                    user.external_id, 
+                    blog_data, 
+                    task_id, 
+                    user_system_id, 
+                    client
+                )
                 # 🧨 고칠 곳
                 await redis_manager.publish(task_id, f"✨ 모든 이미지 작업이 완료되었습니다.", user_system_id)
                 await asyncio.sleep(0.1)
@@ -471,10 +501,25 @@ async def start_bulk_posting(payload: BlogBulkRequest, task_id: str, api_key: st
                     await redis_manager.publish(task_id, f"⏳ 포스팅 성공! {wait_minutes}분 대기 후 다음 글을 작성합니다.", user_system_id)
 
                     # 🧨 [수정] 포스팅 사이 대기 시간도 10초 단위로 쪼개서 중단 체크
-                    total_wait_seconds = wait_minutes * 60
-                    for _ in range(0, total_wait_seconds, 10):
+                    # 1. 랜덤 추가 시간 계산 (초 단위: -120초 ~ +120초)
+                    random_offset = random.randint(-120, 120)
+                    total_wait_seconds = (wait_minutes * 60) + random_offset
+
+                    # 2. 대기 시간이 0보다 작아질 경우를 대비한 안전장치 (최소 10초는 대기하도록 설정)
+                    if total_wait_seconds < 10:
+                        total_wait_seconds = 10
+
+                    print(f"총 {total_wait_seconds}초 대기 시작 (랜덤 보정: {random_offset}초)")
+
+                    # 3. 10초 단위로 쪼개서 대기 및 중단 체크
+                    for i in range(0, total_wait_seconds, 10):
                         await check_abort(task_id) # 대기 중에 중단 버튼 누르면 즉시 반응
-                        await asyncio.sleep(10)
+                        
+                        # 남은 시간이 10초 미만인 경우 남은 만큼만 sleep
+                        remaining = total_wait_seconds - i
+                        sleep_time = 10 if remaining >= 10 else remaining
+                        
+                        await asyncio.sleep(sleep_time)
                     
 
             # 각 유저 로직이 끝날때 세션파일 삭제
